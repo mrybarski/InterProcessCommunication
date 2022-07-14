@@ -1,22 +1,30 @@
 ﻿using InterProcessCommunication;
+using InterProcessCommunication.Extensions;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 
-const string SHARED_MUTEX_NAME = "INTERPROCESSCOMM_APPS";
-
+var fileStream = new InterProcessFileStream("messages.txt");
 
 Console.WriteLine("Podaj numer aplikacji (1/2)");
 var line = Console.ReadLine();
-if (string.IsNullOrEmpty(line) && !(line.IndexOf("1") == 0 || line.IndexOf("2") == 0))
+if (!line.HasReplyForQuestion("1","2"))
 {
     Console.WriteLine("Błędny numer aplikacji");
     return;
 }
 
-int destinationPort = line[0] == '1' ? 60501 : 60502;
-var fileName = CreateLogFile();
+int destinationPort = line![0] == '1' ? 60501 : 60502;
+
+fileStream.CreateFile();
+
+Console.WriteLine("Wyczyścić plik z wiadomościami? (y/n)");
+line = Console.ReadLine();
+if (line.HasReplyForQuestion("y", "n") && line![0] == 'y')
+{
+    fileStream.ClearFile();
+}
 
 var publicIp = await GetPublicIpAddress();
 if (publicIp is null)
@@ -25,18 +33,18 @@ if (publicIp is null)
     return;
 }
 
-using TcpClient tcpClient = new TcpClient();
+using TcpClient tcpClient = new();
 await tcpClient.ConnectAsync("***REMOVED***", destinationPort);
 using NetworkStream netStream = tcpClient.GetStream();
 
-var authCode = GetAuthenticationCode();
+var authCode = GetCode();
 if (string.IsNullOrEmpty(authCode))
 {
     Console.WriteLine("Nie udało się uzyskać kodu z wiadomości powitalnej");
     return;
 }
 
-SendAuthenticationCode();
+SendHash();
 
 var thread = new Thread(ProcessMessages) { IsBackground = true };
 thread.Start();
@@ -45,16 +53,6 @@ Console.WriteLine("Wciśnij dowolny klawisz aby zakończyć");
 Console.ReadKey();
 
 
-
-string CreateLogFile()
-{
-    string fileName = $"messages.txt";
-    if (!File.Exists(fileName))
-    {
-        using FileStream fs = System.IO.File.Create(fileName);
-    }
-    return fileName;
-}
 async Task<IPAddress?> GetPublicIpAddress()
 {
     var httpClient = new HttpClient();
@@ -65,7 +63,7 @@ async Task<IPAddress?> GetPublicIpAddress()
     return externalIp;
 }
 
-string? GetAuthenticationCode()
+string? GetCode()
 {
     byte[] receiveBuffer = new byte[1024];
     int bytesReceived = netStream.Read(receiveBuffer);
@@ -78,32 +76,14 @@ string? GetAuthenticationCode()
     return code;
 }
 
-void SendAuthenticationCode()
+void SendHash()
 {
     string source = $"{publicIp}{DateTime.Now.GetUnixTimeStamp()}{authCode}";
-    using SHA512 sha512Hash = SHA512.Create();
-
-    byte[] sourceBytes = Encoding.UTF8.GetBytes(source);
-    byte[] hashBytes = sha512Hash.ComputeHash(sourceBytes);
-    var hash = Convert.ToHexString(hashBytes);
-    var test = "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF";
-    netStream.Write(Encoding.UTF8.GetBytes(test));
-
-    Console.WriteLine(source);
-    Console.WriteLine(hash);
-    //91.246.215.24616578197598751
-
+    var hash = source.CreateSHA512();
+    netStream.Write(Encoding.UTF8.GetBytes(hash));
 }
 
 void ProcessMessages()
-{
-    byte[] receiveBuffer = new byte[1024];
-    EventWaitHandle waitHandle = new EventWaitHandle(true, EventResetMode.AutoReset, SHARED_MUTEX_NAME);
-
-    ReadAndWriteToFile(waitHandle);
-}
-
-void ReadAndWriteToFile(EventWaitHandle waitHandle)
 {
     if (netStream.DataAvailable)
     {
@@ -111,16 +91,11 @@ void ReadAndWriteToFile(EventWaitHandle waitHandle)
         int bytesReceived = netStream.Read(receiveBuffer);
         var recievedData = receiveBuffer.AsSpan(0, bytesReceived);
 
-        waitHandle.WaitOne();
-
-        using FileStream fs = new(fileName, FileMode.Append);
-        fs.Write(recievedData);
-        fs.Flush();
-
-        waitHandle.Set();
+        fileStream.AppendToFile(recievedData);
     }
     Task.Delay(TimeSpan.FromMilliseconds(50), CancellationToken.None)
                     .GetAwaiter()
-                    .OnCompleted(() => ReadAndWriteToFile(waitHandle));
+                    .OnCompleted(() => ProcessMessages());
 }
+
 
