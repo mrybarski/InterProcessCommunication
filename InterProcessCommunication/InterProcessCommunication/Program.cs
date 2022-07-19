@@ -2,25 +2,32 @@
 using InterProcessCommunication.Extensions;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Cryptography;
 using System.Text;
+
 
 var fileStream = new InterProcessFileStream("messages.txt");
 
-Console.WriteLine("Podaj numer aplikacji (1/2)");
-var line = Console.ReadLine();
-if (!line.HasReplyForQuestion("1","2"))
+Console.WriteLine("Podaj adres IP aplikacji");
+var addressIpRaw = Console.ReadLine();
+if (!IPAddress.TryParse(addressIpRaw, out var ipAddress))
 {
-    Console.WriteLine("Błędny numer aplikacji");
+    Console.WriteLine("Błędny adres IP");
     return;
 }
 
-int destinationPort = line![0] == '1' ? 60501 : 60502;
+Console.WriteLine("Podaj numer portu");
+var portRaw = Console.ReadLine();
+if (!int.TryParse(portRaw, out var destinationPort))
+{
+    Console.WriteLine("Błędny numer portu");
+    Console.ReadKey();
+    return;
+}
 
 fileStream.CreateFile();
 
 Console.WriteLine("Wyczyścić plik z wiadomościami? (y/n)");
-line = Console.ReadLine();
+var line = Console.ReadLine();
 if (line.HasReplyForQuestion("y", "n") && line![0] == 'y')
 {
     fileStream.ClearFile();
@@ -30,17 +37,19 @@ var publicIp = await GetPublicIpAddress();
 if (publicIp is null)
 {
     Console.WriteLine("Nie udało się uzyskać publicznego adresu IP");
+    Console.ReadKey();
     return;
 }
 
 using TcpClient tcpClient = new();
-await tcpClient.ConnectAsync("***REMOVED***", destinationPort);
+await tcpClient.ConnectAsync(ipAddress, destinationPort);
 using NetworkStream netStream = tcpClient.GetStream();
 
 var authCode = GetCode();
 if (string.IsNullOrEmpty(authCode))
 {
     Console.WriteLine("Nie udało się uzyskać kodu z wiadomości powitalnej");
+    Console.ReadKey();
     return;
 }
 
@@ -80,7 +89,8 @@ void SendHash()
 {
     string source = $"{publicIp}{DateTime.Now.GetUnixTimeStamp()}{authCode}";
     var hash = source.CreateSHA512();
-    netStream.Write(Encoding.UTF8.GetBytes(hash));
+    var bytes = Encoding.UTF8.GetBytes(hash);
+    netStream.Write(bytes);
 }
 
 void ProcessMessages()
